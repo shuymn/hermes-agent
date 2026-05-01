@@ -89,7 +89,7 @@
           STAMP_VALUE="$(_hermes_npm_stamp)"
           if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$STAMP_VALUE" ]; then
             echo "${pname}: installing npm dependencies..."
-            ( cd ${folder} && CI=true ${pkgs.lib.getExe' nodejs "npm"} install --silent --no-fund --no-audit 2>/dev/null )
+            ( cd ${folder} && CI=true ${pkgs.lib.getExe' nodejs "npm"} ci --silent --no-fund --no-audit 2>/dev/null )
 
             # Auto-update the nix hash so it stays in sync with the lockfile
             echo "${pname}: prefetching npm deps..."
