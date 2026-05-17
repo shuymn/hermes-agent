@@ -1,0 +1,25 @@
+From aaa195ea2606c9dbe3ed582f06a48e3a65dab392 Mon Sep 17 00:00:00 2001
+From: Shu YAMANI <mail@shuymn.me>
+Date: Fri, 1 May 2026 15:44:20 +0900
+Subject: [PATCH] fork: use npm ci during nix dev shell installs
+
+---
+ nix/lib.nix | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/nix/lib.nix b/nix/lib.nix
+index 3740ef1..91a3b1a 100644
+--- a/nix/lib.nix
++++ b/nix/lib.nix
+@@ -89,7 +89,7 @@
+           STAMP_VALUE="$(_hermes_npm_stamp)"
+           if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$STAMP_VALUE" ]; then
+             echo "${pname}: installing npm dependencies..."
+-            ( cd ${folder} && CI=true ${pkgs.lib.getExe' nodejs "npm"} install --silent --no-fund --no-audit 2>/dev/null )
++            ( cd ${folder} && CI=true ${pkgs.lib.getExe' nodejs "npm"} ci --silent --no-fund --no-audit 2>/dev/null )
+ 
+             # Auto-update the nix hash so it stays in sync with the lockfile
+             echo "${pname}: prefetching npm deps..."
+-- 
+2.54.0
+

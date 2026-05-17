@@ -1,0 +1,156 @@
+name: Sync latest official tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Official NousResearch/hermes-agent tag to use. Empty means latest v* tag."
+        required: false
+        type: string
+      dry_run:
+        description: "Build and test without pushing main."
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-latest-official-tag
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout fork automation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: fork
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Resolve official tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested="${{ inputs.tag }}"
+          if [ -n "$requested" ]; then
+            tag="$requested"
+          else
+            tag="$(
+              git ls-remote --tags --refs https://github.com/NousResearch/hermes-agent.git 'v*' |
+                awk -F/ '{print $NF}' |
+                sort -V |
+                tail -n 1
+            )"
+          fi
+          if [ -z "$tag" ]; then
+            echo "Could not resolve official tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Using official tag: $tag"
+
+      - name: Check current generated tag
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(cat fork/.github/fork/upstream-tag 2>/dev/null || true)"
+          if [ "$current" = "${{ steps.tag.outputs.tag }}" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "main is already generated from $current; skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone official tag
+        if: steps.current.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --branch "${{ steps.tag.outputs.tag }}" \
+            https://github.com/NousResearch/hermes-agent.git work
+
+      - name: Apply fork patches
+        if: steps.current.outputs.skip != 'true'
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          shopt -s nullglob
+          patches=(../fork/.github/fork/patches/*.patch)
+          if [ "${#patches[@]}" -eq 0 ]; then
+            echo "No fork patches found" >&2
+            exit 1
+          fi
+          git am "${patches[@]}"
+
+      - name: Restore fork automation files
+        if: steps.current.outputs.skip != 'true'
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .github/workflows .github/fork
+          rsync -a --delete ../fork/.github/fork/ .github/fork/
+          rsync -a --delete ../fork/.github/workflows/ .github/workflows/
+          printf '%s\n' "${{ steps.tag.outputs.tag }}" > .github/fork/upstream-tag
+          git add .github/fork .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit -m "fork: add latest tag sync automation"
+          fi
+
+      - name: Install dependencies
+        if: steps.current.outputs.skip != 'true'
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv --python 3.11 --seed
+          source .venv/bin/activate
+          uv pip install -e ".[all,dev]"
+
+      - name: Run targeted tests
+        if: steps.current.outputs.skip != 'true'
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          scripts/run_tests.sh tests/hermes_cli/test_cmd_update.py -q
+
+      - name: Push generated main
+        if: steps.current.outputs.skip != 'true'
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          dry_run="${{ inputs.dry_run }}"
+          if [ "$dry_run" = "true" ]; then
+            echo "Dry run requested; skipping push."
+            exit 0
+          fi
+
+          git remote add fork "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git fetch fork main
+          if git diff --quiet HEAD fork/main --; then
+            echo "Generated tree already matches fork/main."
+            exit 0
+          fi
+
+          expected="$(git rev-parse fork/main)"
+          git push fork HEAD:refs/heads/main --force-with-lease=refs/heads/main:"$expected"
